@@ -1,0 +1,49 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:       main
+# Required-Start:
+# Required-Stop:
+# Default-Start:  S
+# Default-Stop:
+# Description:    run main.sh from ROMS
+### END INIT INFO
+
+batmon() {
+	# plus bumps to 3560,10
+	echo 1 > /sys/class/anbernic_misc/chrg_dev
+	echo 3430 > /sys/class/anbernic_misc/shutdown_voltage
+	echo 3 > /sys/class/anbernic_misc/shutdown_cap
+}
+
+udev() {
+	[ -e /proc/sys/kernel/hotplug ] && printf '\000\000\000\000' > /proc/sys/kernel/hotplug
+	/sbin/udevd -d || { echo "FAIL"; exit 1; }
+	udevadm trigger --subsystem-match=block --action=add
+	udevadm trigger --subsystem-match=input --action=add
+	udevadm settle --timeout=2
+}
+
+main() {
+	mount /dev/block/by-name/ROMS /mnt/mmc
+
+	/usr/bin/tinymix set 11 2 # speaker
+	/usr/bin/tinymix set 12 1 # mic
+
+	/mnt/mmc/main.sh &
+}
+
+case "$1" in
+	start|restart|reload|force-reload|"")
+		batmon
+		udev
+		main
+		;;
+	stop|status)
+		;;
+	*)
+		echo "Usage: start" >&2
+		exit 3
+		;;
+esac
+
+:

@@ -1,0 +1,71 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:       expand-roms
+# Required-Start:
+# Required-Stop:
+# Default-Start:  S
+# Default-Stop:
+# Description:    expand ROMS to fill the card on first boot
+### END INIT INFO
+
+set -eu
+
+MOUNTPOINT=/mnt/mmc
+SCRIPT=/etc/init.d/S01expand
+DISABLED=/etc/init.d/disabled.S01expand
+MAIN_SH=/etc/custom/main.sh
+CUSTOM_DIR=/etc/custom
+
+udev() {
+	[ -e /proc/sys/kernel/hotplug ] && printf '\000\000\000\000' > /proc/sys/kernel/hotplug
+	/sbin/udevd -d || { echo "FAIL"; exit 1; }
+	udevadm trigger --subsystem-match=block --action=add
+	udevadm settle --timeout=2
+}
+
+poweroff() {
+	echo s > /proc/sysrq-trigger
+	echo u > /proc/sysrq-trigger
+	VALUE=$(i2cget -f -y 0 0x20 0xf4)
+	i2cset -f -y 0 0x20 0xf4 $((VALUE | 1))
+}
+
+expand() {
+	mkdir -p $MOUNTPOINT
+	mount /dev/block/by-name/ROMS $MOUNTPOINT
+
+	ROMS_DEV=$(readlink -f /dev/block/by-name/ROMS)
+	PART_NO=${ROMS_DEV##*p}
+	DISK_DEV=${ROMS_DEV%p$PART_NO}
+
+	umount $MOUNTPOINT
+
+	sgdisk -e $DISK_DEV
+	partprobe $DISK_DEV || true
+	parted -s $DISK_DEV resizepart $PART_NO 100%
+	partprobe $DISK_DEV || true
+	mkfs.vfat -F 32 -n ROMS $ROMS_DEV
+
+	mount $ROMS_DEV $MOUNTPOINT
+	cp $MAIN_SH $MOUNTPOINT/main.sh
+	rm -rf $CUSTOM_DIR
+	sync
+
+	mv -f $SCRIPT $DISABLED
+}
+
+case "$1" in
+	start|restart|reload|force-reload|"")
+		udev
+		expand
+		poweroff
+		;;
+	stop|status)
+		;;
+	*)
+		echo "Usage: start" >&2
+		exit 3
+		;;
+esac
+
+:

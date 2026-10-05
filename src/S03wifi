@@ -1,0 +1,90 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:       wifi
+# Required-Start:
+# Required-Stop:
+# Default-Start:  S
+# Default-Stop:
+# Description:    create a NetworkManager wifi profile from ROMS/wifi.txt
+### END INIT INFO
+
+set -eu
+
+WIFI_PATH=
+CONNECTION_DIR=/etc/NetworkManager/system-connections
+STATE_PATH=/var/lib/NetworkManager/NetworkManager.state
+
+strip_cr() {
+	printf '%s' "$1" | tr -d '\r'
+}
+
+configure_wifi() {
+	for FILE in /mnt/mmc/wifi.txt /mnt/sdcard/wifi.txt; do
+		if [ -f $FILE ]; then
+			WIFI_PATH=$FILE
+			break
+		fi
+	done
+
+	[ -n "$WIFI_PATH" ] || exit 0
+
+	SSID="$(strip_cr "$(sed -n '1p' $WIFI_PATH)")"
+	PSK="$(strip_cr "$(sed -n '2p' $WIFI_PATH)")"
+
+	[ -n "$SSID" ] || exit 0
+	[ -n "$PSK" ] || exit 0
+
+	UUID="$(uuidgen)"
+	umask 077
+	mkdir -p $CONNECTION_DIR
+	CONNECTION="$CONNECTION_DIR/$SSID.nmconnection"
+	cat > "$CONNECTION" <<EOF
+[connection]
+id=$SSID
+uuid=$UUID
+type=wifi
+interface-name=wlan0
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=$SSID
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-psk
+psk=$PSK
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]
+EOF
+	chmod 600 "$CONNECTION"
+	mkdir -p $(dirname $STATE_PATH)
+	cat > $STATE_PATH <<EOF
+[main]
+NetworkingEnabled=true
+WirelessEnabled=true
+WWANEnabled=true
+EOF
+	rm -f $WIFI_PATH
+}
+
+case "$1" in
+	start|restart|reload|force-reload|"")
+		configure_wifi
+		;;
+	stop|status)
+		;;
+	*)
+		echo "Usage: start" >&2
+		exit 3
+		;;
+esac
+
+:
