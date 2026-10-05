@@ -4,10 +4,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 STOCK="in/stock.img"
-OUT="custom.img"
-OUT_TMP="/tmp/custom.img"
-ZIP_OUT="out/custom.img.zip"
-ZIP_TMP="/tmp/custom.img.zip"
+OUT=""
+OUT_TMP=""
+OUT_DIR="out"
+OUT_NAME="main-rgds-plus"
+ZIP_OUT=""
+ZIP_TMP=""
 SRC_DIR="src"
 
 ROOTFS_MB=384
@@ -30,8 +32,8 @@ cleanup() {
 	remove_loop_nodes
 	[ -n "$SRC_LOOP" ] && losetup -d "$SRC_LOOP" 2>/dev/null
 	[ -n "$DST_LOOP" ] && losetup -d "$DST_LOOP" 2>/dev/null
-	rm -f "$OUT_TMP"
-	rm -f "$ZIP_TMP"
+	[ -n "$OUT_TMP" ] && rm -f "$OUT_TMP"
+	[ -n "$ZIP_TMP" ] && rm -f "$ZIP_TMP"
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -111,13 +113,34 @@ require_readable() {
 	}
 }
 
+next_zip_out() {
+	local today count candidate
+	today="$(date +%Y%m%d)"
+	count="$(find "$OUT_DIR" -maxdepth 1 -type f -name "$OUT_NAME-$today-*.img.zip" | wc -l)"
+	count="${count##* }"
+	candidate="$OUT_DIR/$OUT_NAME-$today-$count.img.zip"
+
+	while [ -e "$candidate" ]; do
+		count=$((count + 1))
+		candidate="$OUT_DIR/$OUT_NAME-$today-$count.img.zip"
+	done
+
+	printf '%s\n' "$candidate"
+}
+
 require_file "$STOCK"
 require_file "$SRC_DIR/S01expand"
 require_file "$SRC_DIR/S02main"
 require_file "$SRC_DIR/S03wifi"
 require_file "$SRC_DIR/main.sh"
+mkdir -p "$OUT_DIR"
+ZIP_OUT="$(next_zip_out)"
+OUT="$(basename "$ZIP_OUT" .zip)"
+OUT_TMP="/tmp/$OUT"
+ZIP_TMP="/tmp/$OUT.zip"
 
-rm -f "$OUT" "$ZIP_OUT" "$OUT_TMP" "$ZIP_TMP"
+echo "preparing $OUT.img.zip"
+rm -f "$OUT" "$OUT_TMP" "$ZIP_TMP"
 
 p1_size="$(part_size 1)"
 p2_size="$(part_size 2)"
