@@ -1,8 +1,7 @@
 #!/bin/sh
 
-DEV_PATH=/dev/mmcblk2p1
-TF2_PATH=/mnt/sdcard
+MAIN_PATH=/mnt/sdcard/main.sh
+if [ -f $MAIN_PATH ]; then
+	exec $MAIN_PATH
+fi
 
-mount -t vfat -o rw,utf8,noatime,nodiratime $DEV_PATH $TF2_PATH
-
-exec $TF2_PATH/main.sh

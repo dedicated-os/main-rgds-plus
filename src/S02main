@@ -25,6 +25,7 @@ udev() {
 
 main() {
 	mount /dev/block/by-name/ROMS /mnt/mmc
+	[ -e /dev/mmcblk2p1 ] && mount -t vfat -o rw,utf8,noatime,nodiratime /dev/mmcblk2p1 /mnt/sdcard
 
 	/usr/bin/tinymix set 11 2 # speaker
 	/usr/bin/tinymix set 12 1 # mic
