@@ -5,7 +5,7 @@
 # Required-Stop:
 # Default-Start:  S
 # Default-Stop:
-# Description:    run main.sh from ROMS
+# Description:    mount TF1 (and optionally TF2) then run main.sh from TF1
 ### END INIT INFO
 
 batmon() {

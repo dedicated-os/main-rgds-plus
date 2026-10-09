@@ -15,6 +15,7 @@ SCRIPT=/etc/init.d/S01expand
 DISABLED=/etc/init.d/disabled.S01expand
 MAIN_SH=/etc/custom/main.sh
 CUSTOM_DIR=/etc/custom
+BOOTLOGO_PENDING=/etc/bootlogo/pending
 
 udev() {
 	[ -e /proc/sys/kernel/hotplug ] && printf '\000\000\000\000' > /proc/sys/kernel/hotplug
@@ -58,6 +59,8 @@ case "$1" in
 	start|restart|reload|force-reload|"")
 		udev
 		expand
+		bootlogo $BOOTLOGO_PENDING
+		rm -rf $BOOTLOGO_PENDING
 		poweroff
 		;;
 	stop|status)

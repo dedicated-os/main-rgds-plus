@@ -3,11 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+DEDICATED_DIR="../dedicated-rgds-plus"
+OUT_NAME="main-rgds-plus"
 STOCK="in/stock.img"
+
 OUT=""
 OUT_TMP=""
 OUT_DIR="out"
-OUT_NAME="main-rgds-plus"
 ZIP_OUT=""
 ZIP_TMP=""
 SRC_DIR="src"
@@ -99,6 +101,84 @@ mount_part() {
 	MOUNTS+=("$dir")
 }
 
+patch_bootlogo() {
+	local boot_dev="$1"
+	local logo_0="$2"
+	local logo_1="$3"
+	local dir="$WORK/bootlogo"
+	local resource_offset original_size original_total resource_size resource_end total_size hash
+
+	rm -rf "$dir"
+	mkdir -p "$dir/resource"
+
+	dd if="$boot_dev" of="$dir/boot.img" bs=1M status=none
+	(
+		cd "$dir"
+		dumpimage -T flat_dt -p 2 -o resource.img boot.img >/dev/null
+		cd resource
+		rsce_tool -u ../resource.img > ../resource-files.txt
+		cp "$logo_0" logo.bmp
+		cp "$logo_1" logo_kernel.bmp
+
+		ESC="$(printf '\033')"
+		FILES="$(sed -n 's/^.*Creating files://p' ../resource-files.txt | sed "s/${ESC}\\[[0-9;]*m//g")"
+		rsce_tool $(for FILE in $FILES; do printf ' -p %s' "$FILE"; done) >/dev/null
+		mv boot-second ../resource-mod.img
+	)
+
+	resource_offset="0x$(fdtget -t x "$dir/boot.img" /images/resource data-position)"
+	original_size="0x$(fdtget -t x "$dir/boot.img" /images/resource data-size)"
+	original_total="0x$(fdtget -t x "$dir/boot.img" / totalsize)"
+	resource_offset="$(($resource_offset))"
+	original_size="$(($original_size))"
+	original_total="$(($original_total))"
+	resource_size="$(wc -c < "$dir/resource-mod.img")"
+	resource_end="$(($resource_offset + $resource_size))"
+	total_size="$(($resource_end + $original_total - $resource_offset - $original_size))"
+
+	dd if="$dir/resource-mod.img" of="$dir/boot.img" bs=512 seek="$(($resource_offset / 512))" conv=notrunc status=none
+
+	export ORIGINAL_SIZE="$original_size" RESOURCE_SIZE="$resource_size" ORIGINAL_TOTAL="$original_total" TOTAL_SIZE="$total_size"
+	hash="$(sha256sum "$dir/resource-mod.img" | awk '{print $1}')"
+	export OLD_HASH
+	OLD_HASH="$(sha256sum "$dir/resource.img" | awk '{print $1}')"
+	export NEW_HASH="$hash"
+	perl -0777 -i -pe '
+	  BEGIN {
+	    $old_size = pack("N", $ENV{ORIGINAL_SIZE});
+	    $new_size = pack("N", $ENV{RESOURCE_SIZE});
+	    $old_total = pack("N", $ENV{ORIGINAL_TOTAL});
+	    $new_total = pack("N", $ENV{TOTAL_SIZE});
+	    $old_hash = pack("H*", $ENV{OLD_HASH});
+	    $new_hash = pack("H*", $ENV{NEW_HASH});
+	  }
+
+	  s/\Q$old_size\E/$new_size/;
+	  s/\Q$old_total\E/$new_total/;
+	  s/\Q$old_hash\E/$new_hash/;
+	' "$dir/boot.img"
+
+	dd if="$dir/boot.img" of="$boot_dev" bs=1M status=none conv=fsync
+	rm -rf "$dir"
+}
+
+install_tool() {
+	local name="$1"
+	local src
+	src="$(command -v "$name")"
+	install -m 755 "$src" "$WORK/dst-rootfs/usr/bin/$name"
+
+	ldd "$src" 2>/dev/null | awk '/=> \// { print $3 } /^\// { print $1 }' | while read -r lib; do
+		case "$lib" in
+			*/ld-linux-aarch64.so.1|*/libc.so.6)
+				continue
+				;;
+		esac
+		[ -e "$WORK/dst-rootfs/usr/lib/$(basename "$lib")" ] && continue
+		install -m 755 "$lib" "$WORK/dst-rootfs/usr/lib/$(basename "$lib")"
+	done
+}
+
 require_file() {
 	[ -e "$1" ] || {
 		echo "missing $1" >&2
@@ -133,13 +213,18 @@ require_file "$SRC_DIR/S01expand"
 require_file "$SRC_DIR/S02main"
 require_file "$SRC_DIR/S03wifi"
 require_file "$SRC_DIR/main.sh"
+require_file "$SRC_DIR/bootlogo"
+require_file "$SRC_DIR/bootlogo-0.bmp"
+require_file "$SRC_DIR/bootlogo-1.bmp"
+require_file "$DEDICATED_DIR/skeleton/bootlogo-0.bmp"
+require_file "$DEDICATED_DIR/skeleton/bootlogo-1.bmp"
 mkdir -p "$OUT_DIR"
 ZIP_OUT="$(next_zip_out)"
 OUT="$(basename "$ZIP_OUT" .zip)"
 OUT_TMP="/tmp/$OUT"
 ZIP_TMP="/tmp/$OUT.zip"
 
-echo "preparing $OUT.img.zip"
+echo "preparing $OUT.zip"
 rm -f "$OUT" "$OUT_TMP" "$ZIP_TMP"
 
 p1_size="$(part_size 1)"
@@ -204,6 +289,9 @@ echo "copying boot partitions"
 for n in 1 2 3 4 5; do
 	dd if="${SRC_LOOP}p${n}" of="${DST_LOOP}p${n}" bs=4M status=none conv=fsync
 done
+
+echo "patching first boot logos"
+patch_bootlogo "${DST_LOOP}p3" "$PWD/$SRC_DIR/bootlogo-0.bmp" "$PWD/$SRC_DIR/bootlogo-1.bmp"
 
 echo "creating rootfs"
 mkfs.ext4 -q -F -L rootfs -U "$(part_uuid "${SRC_LOOP}p6")" "${DST_LOOP}p6"
@@ -305,8 +393,17 @@ done
 install -m 755 "$SRC_DIR/S01expand" "$WORK/dst-rootfs/etc/init.d/S01expand"
 install -m 755 "$SRC_DIR/S02main" "$WORK/dst-rootfs/etc/init.d/S02main"
 install -m 755 "$SRC_DIR/S03wifi" "$WORK/dst-rootfs/etc/init.d/S03wifi"
+install -m 755 "$SRC_DIR/bootlogo" "$WORK/dst-rootfs/usr/bin/bootlogo"
 install -d -m 755 "$WORK/dst-rootfs/etc/custom"
 install -m 755 "$SRC_DIR/main.sh" "$WORK/dst-rootfs/etc/custom/main.sh"
+install -d -m 755 "$WORK/dst-rootfs/etc/bootlogo/pending"
+install -m 644 "$DEDICATED_DIR/skeleton/bootlogo-0.bmp" "$WORK/dst-rootfs/etc/bootlogo/pending/bootlogo-0.bmp"
+install -m 644 "$DEDICATED_DIR/skeleton/bootlogo-1.bmp" "$WORK/dst-rootfs/etc/bootlogo/pending/bootlogo-1.bmp"
+
+echo "installing bootlogo tools"
+install_tool dumpimage
+install_tool fdtget
+install_tool rsce_tool
 
 if [ -f "$WORK/dst-rootfs/etc/profile.d/resolv.sh" ]; then
 	sed -i '/KEYWORD="nameserver"/a [ -e "$ETC_CONFIG" ] || : > "$ETC_CONFIG"' "$WORK/dst-rootfs/etc/profile.d/resolv.sh"

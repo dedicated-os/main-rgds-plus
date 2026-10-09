@@ -5,7 +5,7 @@
 # Required-Stop:
 # Default-Start:  S
 # Default-Stop:
-# Description:    create a NetworkManager wifi profile from ROMS/wifi.txt
+# Description:    create or clear a NetworkManager wifi profile from wifi.txt at root of TF1 or TF2
 ### END INIT INFO
 
 set -eu
@@ -18,27 +18,12 @@ strip_cr() {
 	printf '%s' "$1" | tr -d '\r'
 }
 
-configure_wifi() {
-	for FILE in /mnt/mmc/wifi.txt /mnt/sdcard/wifi.txt; do
-		if [ -f $FILE ]; then
-			WIFI_PATH=$FILE
-			break
-		fi
-	done
+new_connection() {
+	UUID=$1
+	SSID=$2
+	PSK=$3
 
-	[ -n "$WIFI_PATH" ] || exit 0
-
-	SSID="$(strip_cr "$(sed -n '1p' $WIFI_PATH)")"
-	PSK="$(strip_cr "$(sed -n '2p' $WIFI_PATH)")"
-
-	[ -n "$SSID" ] || exit 0
-	[ -n "$PSK" ] || exit 0
-
-	UUID="$(uuidgen)"
-	umask 077
-	mkdir -p $CONNECTION_DIR
-	CONNECTION="$CONNECTION_DIR/$SSID.nmconnection"
-	cat > "$CONNECTION" <<EOF
+	cat <<EOF
 [connection]
 id=$SSID
 uuid=$UUID
@@ -64,14 +49,52 @@ method=auto
 
 [proxy]
 EOF
-	chmod 600 "$CONNECTION"
-	mkdir -p $(dirname $STATE_PATH)
-	cat > $STATE_PATH <<EOF
+}
+
+new_state() {
+	ENABLED=$1
+	cat <<EOF
 [main]
-NetworkingEnabled=true
-WirelessEnabled=true
-WWANEnabled=true
+NetworkingEnabled=$ENABLED
+WirelessEnabled=$ENABLED
+WWANEnabled=$ENABLED
 EOF
+}
+
+configure_wifi() {
+	for FILE in /mnt/mmc/wifi.txt /mnt/sdcard/wifi.txt; do
+		if [ -f $FILE ]; then
+			WIFI_PATH=$FILE
+			break
+		fi
+	done
+
+	[ -n "$WIFI_PATH" ] || exit 0
+	
+	if [ ! -s $WIFI_PATH ]; then
+		rm -f $CONNECTION_DIR/*.nmconnection
+		mkdir -p $(dirname $STATE_PATH)
+		new_state false > $STATE_PATH 
+		rm -f $WIFI_PATH
+		exit 0
+	fi
+
+	SSID="$(strip_cr "$(sed -n '1p' $WIFI_PATH)")"
+	PSK="$(strip_cr "$(sed -n '2p' $WIFI_PATH)")"
+
+	[ -n "$SSID" ] || exit 0
+	[ -n "$PSK" ] || exit 0
+
+	UUID="$(uuidgen)"
+	umask 077
+	
+	mkdir -p $CONNECTION_DIR
+	CONNECTION="$CONNECTION_DIR/$SSID.nmconnection"
+	new_connection "$UUID" "$SSID" "$PSK" > "$CONNECTION"
+	chmod 600 "$CONNECTION"
+	
+	mkdir -p $(dirname $STATE_PATH)
+	new_state true > $STATE_PATH 
 	rm -f $WIFI_PATH
 }
 
